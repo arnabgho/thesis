@@ -1,0 +1,670 @@
+\chapter{STEER: Simple Temporal Regularization For Neural ODEs}
+%\subimport{papers/steer/}{neurips_2020}
+
+\begin{abstract}
+	Training Neural Ordinary Differential Equations (ODEs) is often computationally expensive. Indeed, computing the forward pass of such models involves solving an ODE which can become arbitrarily complex during training. Recent works have shown that regularizing the dynamics of the ODE can partially alleviate this. In this paper we propose a new regularization technique: randomly sampling the end time of the ODE during training. The proposed regularization is simple to implement, has negligible overhead and is effective across a wide variety of tasks. Further, the technique is orthogonal to several other methods proposed to regularize the dynamics of ODEs and as such can be used in conjunction with them. We show through experiments on normalizing flows, time series models and image recognition that the proposed regularization can significantly decrease training time and even improve performance over baseline models.
+\end{abstract}
+
+\section{Introduction}
+\begin{wrapfigure}[18]{r}{0.5\textwidth}
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{3px}}}}
+		\includegraphics[width=0.48\linewidth]{neural_ode.png}  & 
+		\includegraphics[width=0.48\linewidth]{images/main_figure/neural_ode_steer.png}
+		\\
+	\end{tabular}
+	\caption{Flow fields of a standard Neural ODE (left) vs one equipped with STEER (right). These models transform a simple initial distribution $p(z_{t_0})$ to the target distribution $p(z_{t})$. STEER learns simpler flows, which enable faster training.}
+	\label{fig:main_steer}
+\end{wrapfigure}
+
+Neural Ordinary Differential Equations (ODE) are an elegant approach for building continuous depth neural networks \cite{chen2018neural}. They offer various advantages over traditional neural networks, for example a constant memory cost as a function of depth and invertibility by construction. %
+As they are inspired by dynamical systems, they can also take advantage of the vast amount of mathematical techniques developed in this field.
+Incorporating continuous depth also enables efficient density estimation \cite{grathwohl2018ffjord} and modeling of irregularly sampled time series \cite{rubanova2019latent}.
+
+The aforementioned advantages come at the expense of a significantly increased computational cost compared with traditional models like Residual Networks \cite{he2016deep}.
+The training dynamics of Neural ODEs become more complicated as training progresses and the number of steps taken by the adaptive ODE solver (typically referred to as the number of function evaluations) can become prohibitively large \cite{dupont2019augmented}. In fact, several works have argued that this is one of the most pressing limitations of Neural ODEs \cite{chen2018neural, dupont2019augmented, finlay2020train}. It is therefore important to design methods that can help reduce the computational cost of this tool.
+
+A natural approach for tackling this issue is to explore regularization techniques that simplify the underlying dynamics for these models. Indeed, simpler dynamics have shown benefits in terms of faster convergence and a lower number of function evaluations both during training and testing \cite{dupont2019augmented}.
+\cite{finlay2020train} recently proposed an interesting technique for explicitly regularizing the dynamics based on ideas from optimal transport showing significant improvements in the effective convergence time.
+In this work, we propose a regularization technique in order to further accelerate training. Our regularization is orthogonal to previous approaches and can therefore be used in conjunction with them. Our technique is extremely simple: during training we randomly sample the upper limit of the ODE integration.
+
+
+
+Specifically, the solver in Neural ODEs takes as input the integration limits $(t_0,t_1)$.
+We propose to introduce regularization by randomly perturbing the end time parameter $t_1$ to be $t_1\pm \delta$ where $\delta$ is a random variable.
+% We show that our approach is theoretically valid by proving the existence of the solution for our perturbed ODE.
+Empirically, we demonstrate that, in a wide variety of tasks, the proposed regularization achieves comparable performance to unregularized models at a significantly lower computational cost. We test our regularization technique on continuous normalizing flows \cite{grathwohl2018ffjord}, irregularly sampled time series \cite{rubanova2019latent} and image recognition tasks and show that it improves performance across all these tasks. It also performs better in certain instances of Stiff ODEs. Stiff ODEs are a widely studied topic in the field of engineering\cite{curtiss1952integration}. During training the dynamics learnt by the implicit model parametrized by the neural network can turn into an instance of a Stiff ODE. Techniques which could tackle the instances of Stiff ODE would prove to be instrumental as these implicit deep learning models mature. 
+
+
+
+\section{Related Work}
+Connections between deep neural networks and dynamical systems were made as early as \cite{lagaris1998artificial}. The adjoint sensitivity technique was explored in \cite{pearlmutter1995gradient}. Some early libraries such as dolfin \cite{farrell2013automated,rackauckas2017differentialequations}, implemented the adjoint method for neural network frameworks. Previous works have shown the connection between residual networks and dynamical systems \cite{ruthotto2019deep,haber2017stable,lu2017beyond, weinan2017proposal,wang2019resnets, avelin2019neural}. By randomly dropping some blocks of a residual network, it was demonstrated that deep neural networks could be trained \cite{huang2016deep} or tested \cite{veit2016residual,ghosh2019interactive}
+with stochastic depth, and that such a training procedure produces ensembles of shallower networks. 
+
+Neural ODEs \cite{chen2018neural} introduced a framework for training ODE models with backpropagation. Recent works \cite{massaroli2020dissecting, zhang2019approximation, cuchiero2019deep, jabir2019mean, massaroli2020stable, davis2020time, hanshu2019robustness,norcliffe2020second} have tried to analyze this framework theoretically and empirically. Neural ODEs were extended to work with flow based generative models \cite{grathwohl2018ffjord}. In contrast to standard flow based models such as \cite{kingma2018glow, dinh2016density, papamakarios2017masked, papamakarios2019normalizing}, continuous normalizing flows do not put any restrictions on the model architecture. 
+Furthermore, Neural ODEs have been applied in the context of irregularly sampled time series models \cite{rubanova2019latent}, reinforcement learning \cite{du2020model} and for set modeling\cite{li2020exchangeable}. Neural ODEs have also been explored for harder tasks such as video generation \cite{yildiz2019ode2vae,kanaasimple} and for modeling the evolving dynamics of graph neural networks \cite{xhonneux2019continuous}. 
+Recent work has also extended Neural ODEs to stochastic differential equations \cite{li2020scalable, liu2019neural, hodgkinson2020stochastic, oganesyan2020stochasticity, wu2020stochastic, jia2019neural}.
+
+The methods most relevant to our work are \cite{kelly2020learning, finlay2020train} and \cite{dupont2019augmented}. A regularization based on principles of optimal transport which simplifies the dynamics of continuous normalizing flow models, was introduced in \cite{finlay2020train} to make training faster. Equations which are easier to learn were analyzed in \cite{kelly2020learning} whereby they used a differential surrogate for the time cost of standard numerical solvers, using higher-order derivatives of solution trajectories.  Augmented Neural ODEs \cite{dupont2019augmented} introduced a simple modification to Neural ODEs by adding auxillary dimensions to the ODE function and showing how this simplified the dynamics. Our work is complementary to these methods, and we empirically demonstrate that our method can be used to further improve the performance of these techniques.
+
+There is a huge treasure of work which deals with instability in training ODEs\cite{dahlquist198533,dahlquist1976error}. Curtiss et al. \cite{curtiss1952integration} were one of the first works that dealt with solving stiff equations. It was observed in Curtiss and Hirschfelder \cite{curtiss1952integration} that explicit methods failed for the numerical solution of ordinary differential equations that model certain chemical reactions. It is very difficult to integrate "stiff" equations by ordinary numerical methods. Small errors are rapidly magnified if the equations are integrated. The other case might be that the errors oscillate rapidly. Implicit methods such as the second order Adams-Moulton (AM2) \cite{wanner1996solving} are elegant techniques which deal with some of the problems of stiff ODEs. In the context of Neural ODEs\cite{chen2018neural} implicit computations reduces the efficiency of the solvers. This effect is especially apparent in complex modeling tasks such as generative modeling using continuous normalizing flows\cite{grathwohl2018ffjord} and irregularly sampled timeseries models\cite{rubanova2019latent}. Hence an analysis of simple scenarios of stiff equations which cause problems for standard Neural ODEs are discussed in the following sections.  
+% Stiff ODEs have been extensively researched in the field of differential equations \cite{brugnano2011fifty}. Inspite of years of research a concrete definition of Stiff ODEs hasn't been agreed upon \cite{soderlind2015stiffness}. We highlight how some of the problems of Stiff ODEs could impact the training dynamics of Neural ODEs in specific scenarios. Certain discussions of Stiff ODEs define that the stiffness concerns the underlying mathematical form of the equation, integration time and a set of initial data.
+
+
+\section{Methodology}
+
+\subsection{Neural ODEs}
+Neural ODEs can be interpreted as a continuous equivalent of Residual networks \cite{he2016deep}. The transformation of a residual layer is $\mathbf{z}_{t+1}= \mathbf{z}_t + f_t(\mathbf{z}_t)$, where the representation at layer $t$ is $\mathbf{z}_t$ and $f_t( \mathbf{z}_t)$ is a function parametrized by a neural network. The output dimension of the function $f_t(\mathbf{z}_t)$ should be the same as the input dimension to allow it to be added to the previous layer's features $\mathbf{z}_t$. This transformation can be rewritten as
+
+\begin{equation}
+	\frac{\mathbf{z}_{t+\delta_t}-\mathbf{z}_t}{ \delta_t } = f_t(\mathbf{z}_t) , \; \; \; \delta_t = 1,
+	\label{eq:resnet}
+\end{equation}
+
+which can be interpreted as finite difference approximation of the derivative. In contrast to traditional deep neural networks where $\delta_t=1$ is fixed, Neural ODEs \cite{chen2018neural} introduced a continuous version by analysing \eqnref{eq:resnet} in the limit $\delta_t \rightarrow 0$. The resulting equation becomes 
+
+\begin{equation}
+	\frac{d\mathbf{z}(t)}{dt} = f(\mathbf{z}(t),t).
+	\label{eq:neural_ode_def}
+\end{equation}
+
+To transform an input $\mathbf{x}$ to an output $\mathbf{y}$, Residual networks use a sequence of $k$ functions to transform the representation. In an analogous manner, Neural ODEs evolve the  representation from the initial time $t=t_0, \; \mathbf{z}(t_0)= \mathbf{x}$, to the final time $t=t_1, \; \mathbf{z}(t_1)= \mathbf{y}$. The representation $\mathbf{z}(t)$ at any given time $t$ can then be obtained by solving \eqnref{eq:neural_ode_def} using an off-the-shelf ODE solver with the function $f(\mathbf{z}(t),t)$ parameterized by the neural network. To update the parameters of the function $f(\mathbf{z}(t),t)$ such that $\mathbf{z}(t_1) \approx \mathbf{y}$ we backpropagate through the operations of the ODE solver to obtain the appropriate gradients.
+
+
+
+\subsection{Temporal Regularization}
+The formulation of a standard Neural ODE is given by
+
+\begin{equation}
+	\mathbf{z}(t_1)= \mathbf{z}(t_0) + \int_{t_0}^{t_1} f(\mathbf{z}(t) , t , \mathbf{\theta}) dt = \text{ODESolve}  (\mathbf{z}(t_0) , f , t_0, t_1 , \mathbf{\theta}  ),
+	\label{eq:ode_formulation}
+\end{equation}
+
+where $\mathbf{z}(t)$ is the latent representation at any time $t$. $\mathbf{\theta}$ are the parameters of the function $f$ and $(t_0, t_1)$ are the limits of the integration. The initial condition of the ODE is set as $\mathbf{z}(t_0)=\mathbf{x}$. 
+
+
+Neural ODEs often take an excessively large time to train, especially in the case of continuous normalizing flows \cite{grathwohl2018ffjord} . The dynamics become more complicated as training progresses thus leading to an increase in the number of function evaluations. In the context of Neural ODEs, the dynamics of the ODE and training time are intricately related. In practice, simpler dynamics \cite{dupont2019augmented, finlay2020train} often lead to faster training with fewer function evaluations. Regularization is commonly used in machine learning to ease the training of a model and improve its generalization. Some common instances include Batchnorm \cite{ioffe2015batch} and early stopping \cite{yao2007early}. 
+
+
+
+
+Neural ODEs continuously evolve the representation $\mathbf{z}(t)$ with time $t$. Thus in the context of neural ODEs, an alternative type of regularization is possible, namely temporal regularization. In this work, we propose a simple regularization technique that exploits this temporal property. We propose to perturb the final time $t_1$ for the integration of the Neural ODE in \eqnref{eq:ode_formulation} during training. At each training iteration, the final time $t_1$ for the integration is stochastically sampled. More formally, if we assume $t_0<t_1$, then our regularization can be formulated as 
+\begin{equation}
+	\begin{split}
+		\label{skip_formulation}
+		\mathbf{z}(t_1) &= \mathbf{z}(t_0) + \int_{t_0}^{T} f(\mathbf{z}(t) , t , \theta) dt = \text{ODESolve}(\mathbf{z}(t_0) , f , t_0, T , \theta  ), \\
+		T &\sim \text{Uniform} ( t_{1}-b, t_{1}+ b ),  \\
+		b &< t_1-t_0 :  \text{parameter controlling interval of uniform distribution}. \\
+	\end{split}
+\end{equation}
+
+
+\begin{wrapfigure}[10]{r}{0.45\linewidth}
+	% \vspace{-0.25in}
+	\centering  
+	\frame{\includegraphics[trim=2cm 16cm 3cm 7cm, clip=true,width=0.9\linewidth]{images/models/behavior.pdf}} 
+	\caption{Effective behavior of Neural ODEs with STEER regularization. The solution is reached at a time $t_1-b$ instead of time $t_{1}$.}
+	\label{fig:behavior}
+\end{wrapfigure}
+
+We call the technique STEER, which stands for Simple Temporal Regularization. 
+Since Neural ODEs model a continuous series of transformations, applying STEER is essentially equivalent to performing a variable number of transformations on the input $\mathbf{x}$ in each training iteration, thereby introducing a new form of stochasticity in the training process.
+
+We observe that the proposed regularization effectively ensures convergence to the solution at time $t_1-b$. The effective behavior of $\mathbf{z}(t)$ can be see in \figref{fig:behavior} 
+
+\subsection{Stiff ODEs} 
+\label{subsection:stiff_ode}
+
+Stiff ODEs have been extensively researched in the field of differential equations \cite{brugnano2011fifty}. Inspite of years of research a concrete definition of Stiff ODEs has not been agreed upon \cite{soderlind2015stiffness}. We highlight how some of the problems of Stiff ODEs could impact the training dynamics of Neural ODEs in specific scenarios. Certain discussions of Stiff ODEs define that the stiffness concerns the underlying mathematical form of the equation, integration time and a set of initial data.
+
+In terms of the mathematical equation, stiffness is a problem that can arise when numerically solving ODEs. In such systems there is typically a fast and a slow transient component which causes adaptive ODE solvers to take exceedingly small steps. This increases the number of function evaluations and the time taken to integrate the function. %
+Furthermore, in Neural ODEs, the function $\frac{d \mathbf{z} }{ dt }$ is parameterized by a neural network which is updated during training, and could become stiff. This would be hard for a traditional ODE solver to integrate efficiently, thereby making this a limitation.
+
+
+Stiffness ratio is one of the techniques used to characterize some forms of stiff equations. The stiffness ratio is used to characterize the stiffness for the general case of linear constant coefficient systems. These systems can be represented as 
+\begin{equation}
+	\frac{d \mathbf{z} }{ dt } = \mathbf{Az} + f(t),
+	\label{eq:stiff}
+\end{equation}
+where $\mathbf {z} ,f(t) \in \mathbb{R} ^{n}$ and $\mathbf {A}$ is a $n\times n$ matrix with eigenvalues  $\lambda_{i}\in \mathbb{C} ,i=1,2,\ldots ,n$ (assumed distinct) and corresponding eigenvectors  $\mathbf {c_{i}} \in \mathbb{C} ^{n},i=1,2,\ldots ,n$. The eigenvalues and eigenvectors can be complex. 
+The general solution of \eqnref{eq:stiff} takes the form
+\begin{equation}
+	\mathbf {z}(t)=\sum_{i=1}^{n}\kappa_{i}\exp(\lambda _{i}t) \mathbf{c}_{i}+ \mathbf{g}(t) .
+\end{equation}
+
+If $\lambda_{i}$ is complex, the term $\exp(\lambda _{i}t)$ varies sinusoidally. The stiffness ratio is defined as $\frac{\text{max}_{i=1 \dots n} |Re(\lambda_{i})|}{ \text{min}_{i=1 \dots n}|Re(\lambda_{i})|}$, where $Re(\lambda_i)$ denotes the real component of $\lambda_i \in \mathbb {C}$. Ordinarily, temporal regularization might fail in the face of stiffness. However, in our empirical experiments we observed that at least in the case of toy problems, STEER actually performed better. This analysis is provided in the next section. %In the next section, we show how STEER can help tackle stiffness for a range of stiffness ratios on a toy problem where Neural ODEs struggle.
+
+
+
+\section{Experiments}
+In this section, we demonstrate the effectiveness of the proposed method on several classes of problems.  First, we conduct experiments on continuous normalizing flow based generative models, and compare against FFJORD \cite{grathwohl2018ffjord} and RNODE \cite{finlay2020train}. 
+Then, we conduct experiments on irregularly sampled time-series models, and compare against the models and baselines proposed in Latent ODEs \cite{rubanova2019latent}. 
+We also conduct experiments on feedforward models for image recognition, and compare against Neural ODEs and Augmented Neural ODEs \cite{dupont2019augmented}. We finally evaluate STEER and standard Neural ODEs on a toy stiff ODE experiment.
+
+\begin{figure}[]
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{3px}}}}
+		\includegraphics[width=0.32\linewidth]{images/paths_b_comparison/particle_trajectory_0.png} & 
+		\includegraphics[width=0.32\linewidth]{images/paths_b_comparison/particle_trajectory_25.png} &
+		\includegraphics[width=0.32\linewidth]{images/paths_b_comparison/particle_trajectory_375.png} &
+		\\
+		$b=0$ & $b=0.25$ & $b=0.375$ \\
+	\end{tabular}
+	\caption{Plots showing the path taken by FFJORD with STEER regularization. STEER regularization ($b=0.25$ and $b=0.375$) performs the same transformation in shorter paths.}
+	\label{fig:path_b_comparison}
+\end{figure}
+
+
+
+\subsection{Generative Models}
+Continuous normalizing flow based generative models \cite{grathwohl2018ffjord, chen2018neural} provide an alternate perspective to generative modeling. 
+Let $ p( \mathbf{x} )$ be the likelihood of a datapoint $\mathbf{x}$ and $p( \mathbf{z} )$ be the likelihood of the latent $\mathbf{z}$. 
+FFJORD \cite{grathwohl2018ffjord} showed that under certain conditions the change in log probability also follows a differential equation $\frac{d \log(p( \mathbf{z}(t)))}{d t} = -\text{tr} \left( \frac{df}{d \mathbf{z} (t)} \right)$. Thus the total change in log probability can be obtained by integrating the equation which leads to %
+\begin{equation}
+	\log p( \mathbf{z} (t_1)) = \log p( \mathbf{z} (t_0)) - \int_{t_0}^{t_1} \text{tr} \left( \frac{df}{d \mathbf{z} (t)} \right) dt.  
+\end{equation}
+This allows to compute the point $\mathbf{z_0}$ which generates a given datapoint $\mathbf{x}$, and $\log p( \mathbf{x} )$ under the model by solving the initial value problem:
+\begin{align}\label{eq:reverseivp} 
+	\underbrace{\begin{bmatrix}
+			\mathbf{z_0} \\ \log p(\mathbf{x}) - \log p_{\mathbf{z_0}}(\mathbf{z_0})
+	\end{bmatrix}}_{\textnormal{solutions}} = \underbrace{\int_{T}^{t_0}
+		\begin{bmatrix}
+			f( \mathbf{z} (t), t; \theta) \\ - \text{tr} \left( \frac{df}{d \mathbf{z}(t)} \right) 
+		\end{bmatrix}dt}_{\textnormal{dynamics}},\qquad
+	\underbrace{\begin{bmatrix}
+			\mathbf{z}(T) \\ \log p(\mathbf{x}) - \log p(\mathbf{z}(T))
+		\end{bmatrix} = 
+		\begin{bmatrix}
+			\mathbf{x} \\ \mathbf{0}
+	\end{bmatrix}  }_{\textnormal{initial values}} .
+\end{align}
+The combined dynamics of $\mathbf{z}(t)$ and the log-density of the sample is integrated backwards in time from $T$ to $t_0$. The log likelihood $\log p(\mathbf{x})$ can be computed by adding $\log p_{\mathbf{z_0}}(\mathbf{z_0})$ to the solution of \eqnref{eq:reverseivp}. A major drawback of continuous normalizing flow based models is extremely slow convergence.
+STEER regularization enables faster convergence by sampling $T \sim \text{Uniform}(t_1-b,t_1+b)$ at each iteration.
+
+We focus on the task of density estimation of image datasets using the same architectures and experimental setup as FFJORD  \cite{grathwohl2018ffjord}. More details are provided in the supplementary material.
+The performance of the model is evaluated on multiple datasets, namely MNIST \cite{lecun1990handwritten}, CIFAR-10 \cite{krizhevsky2009learning} and ImageNet-32 \cite{Deng09ImageNet}, and the results are shown in \tabref{tab:cnf_results}.  The performance is also analyzed in the simple scenario of a 1D Mixture of Gaussians as shown in \figref{fig:path_b_comparison}. 
+
+\begin{table}
+	\centering
+	\resizebox{\columnwidth}{!}{%
+		\begin{tabular}{l c c c c c c}
+			\toprule
+			& \multicolumn{2}{c}{MNIST} & \multicolumn{2}{c}{CIFAR-10} & \multicolumn{2}{c}{IMAGENET-32}\\
+			& BITS/DIM & TIME & BITS/DIM & TIME & BITS/DIM & TIME \\
+			\midrule
+			FFJORD, VANILLA. &  $0.974$ & $68.47$ & $3.40$ & $> 5$ days & $3.96$ & $>5$ days\\
+			FFJORD RNODE. \cite{finlay2020train} & $0.973$ & $24.37$ & $3.398$ & $31.84$ & $2.36$ & $30.1$ \\
+			\hdashline
+			FFJORD, VANILLA. + STEER ($b=0.5$) &  $0.974$ & $51.21$ & $3.40$ & $86.34$ & $3.84$ & $>5$ days \\
+			FFJORD, VANILLA. + STEER ($b=0.25$) &  $0.976$ & $58.21$ & $3.41$ & $103.4$ & $3.87$ & $>5$ days \\
+			FFJORD RNODE + STEER ($b=0.5$) & $\mathbf{0.971}$ & $\mathbf{16.32}$ & $\mathbf{3.397}$ & $\mathbf{22.24}$ & $\mathbf{2.35}$ & $\mathbf{24.9}$ \\
+			FFJORD RNODE + STEER ($b=0.25$) & $0.972$ & $19.71$ & $3.401$ & $25.24$ & $2.37$ & $27.84$ \\
+			\bottomrule %
+		\end{tabular}
+	}
+	\caption{Test accuracy and training time comparison on various image datasets. Unless mentioned as days, the time reported is in hours.}  %
+	\label{tab:cnf_results}
+\end{table}
+
+It can be seen in \tabref{tab:cnf_results} that models with STEER regularization converge much faster. In some cases, such as on CIFAR-10, our model is $30\%$ faster than the state of the art.
+
+\figref{fig:path_b_comparison} shows the evolution of the probability distribution from the latent distribution $p(\mathbf{z})$ to the data distribution $p(\mathbf{x})$ at different test times. It can be seen that the trajectories reach the final states at an earlier test time with STEER regularization.
+
+
+\begin{table}
+	\small{
+		\parbox{.48\textwidth}{
+			\centering
+			\begin{tabular}{l c}
+				\toprule
+				\textbf{Model} & \textbf{Accuracy} \\ \midrule
+				Latent ODE (ODE enc) & $0.846 \pm 0.013$ \\
+				Latent ODE (RNN enc.) &  $0.835 \pm 0.010$ \\
+				ODE-RNN &  $0.829 \pm 0.016$ \\
+				\midrule
+				Latent ODE (ODE enc, STEER) & $\mathbf{0.880 \pm 0.011}$ \\ 
+				Latent ODE (RNN enc, STEER) & $0.865 \pm 0.021$ \\ 
+				ODE-RNN (STEER) & $0.872 \pm 0.012$ \\ 
+				\bottomrule %
+			\end{tabular}
+			\caption{Per-time-point classification accuracies on the Human Activity dataset.}
+			\label{tab:latent_ode_human_activity}
+		}
+		\hfill
+		\parbox{.48\textwidth}{
+			\centering
+			\begin{tabular}{l c}
+				\toprule
+				\textbf{Model} & \textbf{AUC} \\ \midrule
+				Latent ODE (ODE enc) & $0.829 \pm 0.004$ \\
+				Latent ODE (RNN enc.) &  $0.781 \pm 0.018$ \\
+				ODE-RNN & $\mathbf{0.833 \pm 0.009}$ \\
+				\midrule
+				Latent ODE (ODE enc, STEER) & $0.810 \pm 0.018$ \\ 
+				Latent ODE (RNN enc, STEER) & $0.772 \pm 0.014$ \\ 
+				ODE-RNN (STEER) & $0.811 \pm 0.007$ \\ 
+				\bottomrule %
+			\end{tabular}
+			\caption{Per-sequence classification AUC on Physionet.}
+			\label{tab:latent_ode_physionet}
+			
+		}
+	}
+\end{table}
+
+\begin{table}
+	\centering
+	\resizebox{\columnwidth}{!}{
+		\begin{tabular}{l | c c c c | c c c c}
+			\toprule
+			& \multicolumn{4}{c}{Interpolation (\% Observed Pts.)} & \multicolumn{4}{c}{Extrapolation (\% Observed Pts.)}\\
+			Model & 10 \% & 20 \% & 30 \% & 50 \% & 10 \% & 20 \% & 30 \% & 50 \% \\
+			\midrule
+			
+			Latent ODE (ODE enc) & $0.360$ &  $0.295$ &  $0.300$ & $0.285$ & $1.441$ & $1.400$ & $1.175$ & $1.258$ \\
+			Latent ODE (RNN enc.) & $2.477$ & $0.578$ & $2.768$ & $0.447$ & $1.663$ & $1.653$ & $1.485$ & $1.377$ \\
+			ODE-RNN & $1.647$ & $1.209$ & $0.986$ & $0.665$ & $13.508$ & $31.950$ & $15.465$ & $26.463$ \\
+			\midrule
+			Latent ODE (ODE enc, STEER) & $\mathbf{0.230}$ &  $\mathbf{0.235}$ &  $\mathbf{0.246}$ & $\mathbf{0.210}$ & $\mathbf{1.01}$ & $\mathbf{0.98}$ & $\mathbf{1.01}$ & $\mathbf{1.04}$ \\
+			Latent ODE (RNN enc., STEER) & $2.31$ & $0.561$ & $2.534$ & $0.386$ & $1.541$ & $1.498$ & $1.236$ & $1.119$ \\
+			ODE-RNN (STEER) & $1.528$ & $1.09$ & $0.796$ & $0.603$ & $11.508$ & $29.34$ & $14.23$ & $23.528$ \\
+			\bottomrule %
+		\end{tabular}
+	}
+	\caption{Test Mean Squared Error (MSE) ($ \times 10^{-2}$
+		) on the MuJoCo dataset.}
+	\label{tab:mujoco_results}
+\end{table}
+
+\subsection{Times Series Models}
+
+
+
+For time series models, the function is evaluated at multiple times $t_0,..t_n$. We employ the regularization between every consecutive pair of points $(t_i,t_{i+1})$. More formally, if the time is split into consecutive intervals $ (t_0,t_1)...(t_{n-1},t_n)$, we start with $t_0$ and the initialization $\mathbf{z}(t_0)$ and sample the end time as $T \sim \text{Uniform}(t_1-b,t_1+b)$. The resulting integration using the ODE solver gives us the latent representation $\mathbf{z}(t_1)$. We repeat the same procedure where the limits of integration are now $(t_1,t_2)$. In this iteration $t_1$ is not altered while $T \sim \text{Uniform}(t_2-b,t_2+b)$ is sampled to obtain $\mathbf{z}(t_2)$  and so on. 
+In the case of irregularly sampled time series models, the length of the interval $t_{i+1}-t_i$ can itself vary. The parameter $b$ in this case is adaptive such that $b=|t_{i+1}-t_i|-\epsilon$. The $\epsilon$ parameter is added to avoid numerical instability issues. In the case of time series models the parameter $b$ changes at each forward pass thus adding another source of stochasticity.  %
+
+Latent ODEs \cite{rubanova2019latent} introduced irregularly sampled time series models in which Neural ODEs perform much better. Indeed these datasets break the basic assumptions of a standard RNN, namely that the data are not necessarily collected at regular time intervals. This is the case in several real life scenarios such as patient records or human activity recognition which are observed at irregularly sampled timepoints. 
+
+The Mujoco experiments consist of a physical simulation of the "Hopper" model from the Deepmind control suite. %
+The initial condition uniquely determines the trajectory. It consists of $10,000$ sequences of $100$ time points each. 
+The Human Activity dataset \cite{rubanova2019latent} consists of sensor data fitted to individuals. The sensor data is collected using tags attached to the belt, chest and ankles of human performers. It results in $12$ features in total. The task involves classifying each point as to which activity was being performed. Physionet \cite{silva2012predicting} consists of time series data from initial $48$ hours of ICU admissions. It consists of sparse measurements where only some of the features' measurements are taken at an instant. The measurement frequency is also irregular which makes the dataset quite challenging. To predict mortality, binary classifiers were constructed by passing the hidden state to a $2$ layer binary classifier.
+
+We use the same architecture and experiment settings as used in Latent ODEs \cite{rubanova2019latent}. For the Mujoco experiment $15$ and $30$ latent dimensions were used for the generative and recognition models respectively. The ODE function had $500$ units in each of the $3$ layers. A $15$ dimensional latent state was used for the Human Activity dataset.  For the Physionet experiments the ODE function has $3$ layers with $50$ units each. The classifier consisted of $2$ layers with $300$ units each. 
+
+
+In the case of irregularly sampled timeseries with Latent ODEs, the number of function evaluations is not a major concern since the training time is quite small, so we compare only in terms of accuracy. It can be seen in \tabref{tab:latent_ode_human_activity} and \tabref{tab:mujoco_results} that STEER regularization consistently improves the performance of ODE based models.  \tabref{tab:mujoco_results} demonstrates that the extrapolation results are much better with STEER regularization, indicating that it may help improve the generalization of the model. However in the case of Physionet \tabref{tab:latent_ode_physionet}, the results do not improve over standard Neural ODEs, although the performance remains very close. 
+
+\begin{table}
+	\centering
+	\begin{tabular}{l c c c c}
+		\toprule
+		& NODE & NODE(STEER) & ANODE & ANODE(STEER) \\ \midrule
+		MNIST & $97.2\% \pm 0.2$ & $98.3\% \pm 0.3 $& $98.2\% \pm 0.1$ & $\mathbf{98.6\% \pm 0.3} $ \\
+		CIFAR-10 & $53.7\% \pm 0.4$ & $54.9\% \pm 0.5$ & $60.6\% \pm 0.4$ & $\mathbf{62.1\% \pm 0.2}$      \\
+		SVHN &  $81.0\% \pm 0.6$ & $81.8\% \pm 0.3$  & $83.5\% \pm 0.5$  & $\mathbf{84.1 \pm 0.2}$\\
+		\bottomrule %
+	\end{tabular}
+	\caption{Test accuracies on Feedforward models on various datsets.}
+	\label{tab:recognition_accuracies}
+\end{table}
+\subsection{Feedforward Models}
+In feedforward learning for classification and regression, the Neural ODE framework can be used to map the input data $\mathbf{x} = \mathbf{z}(t_0) \in \mathbb{R}^d$ to features $\mathbf{z}(t) \in \mathbb{R}^d$ at any given time $t$. For standard neural ODEs, one integrates in the range $(t_0,t_1)$, and for STEER the integration is performed in the range $(t_0,T)$ where $T \in \text{Uniform}(t_1-b,t_1+b)$. Once the features $\mathbf{z}(T)$ at the final time $T$ are obtained, a linear layer $\mathbb{R}^d \rightarrow \mathbb{R}$ is used to map the features to the correct dimension for downstream tasks such as classification or regression.
+
+
+We evaluate STEER on a similar set of experiments as performed in \cite{dupont2019augmented} on the MNIST \cite{lecun1990handwritten}, CIFAR-10 \cite{krizhevsky2009learning} and SVHN \cite{Netzer11SVHN} datasets using convolutional architectures for $f(\mathbf{z}(t), t)$. We use the same architectures and experimental settings as used in \cite{dupont2019augmented} for both Neural ODEs (NODE) and Augmented Neural ODEs (ANODE). 
+For the MNIST experiments, $92$ filters were used for NODEs while $64$ filters were used for ANODEs to compensate for $5$ augmented dimensions. For the CIFAR-10 and SVHN experiments, $125$ filters were used for NODEs while $64$ filters were used for ANODEs with $10$ augmented dimensions. Such a design was employed to ensure a roughly similar number of parameters for a fair comparison.
+
+
+
+\tabref{tab:recognition_accuracies} demonstrates the performance of STEER regularization with $b=0.99$. STEER provides a small boost in accuracy and performs consistently across all datasets. 
+
+
+
+\subsection{A Toy Example of Stiff ODE}
+
+In this experiment, we analyze a toy example of stiff ODE from \cite{chapra2010numerical}. The aim of this experiment is to highlight the vulnerability of Neural ODEs to stiffness. The experimental setting for section 4.4 was similar to the one used in the official github repository \footnote{https://github.com/rtqichen/torchdiffeq/blob/master/examples/ode\_demo.py} of Neural ODE. Instead of using a 2-D ODE we used a 1-D ODE to be able to better visualize and analyze the behavior. We used Eq 12 in the paper as mentioned in the numerical methods book by \cite{chapra2010numerical} on page 752. It was surprising that a Neural ODE was able to model a 2 dimensional model with ease while the stiff equation was extremely hard for the Neural ODE to model.
+
+The ODE is given by 
+\begin{equation}
+	\frac{dy}{dt}= -1000y + 3000 - 2000e^{-t},
+	\label{eq:stiff}
+\end{equation}
+
+
+
+\begin{wrapfigure}[12]{r}{0.55\textwidth}
+	\vspace{-0.1in}
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{3px}}}}
+		\includegraphics[width=0.48\linewidth]{images/results/stiff-experiments/neural_ode_single_clear.png} &
+		\includegraphics[width=0.48\linewidth]{images/results/stiff-experiments/neural_ode_steer_single_clear.png}
+		\\
+	\end{tabular}
+	\caption{Standard Neural ODE struggles while STEER regularization helps to fit a stiff ODE with stiffness ratio $r=1000$.}
+	\label{fig:toy_steer}
+\end{wrapfigure}
+
+with the initial condition of $y(0)=0$. 
+The solution for the above stiff ODE is  $y = 3 - 0.998e^{-1000t} -2.002 e^{-t}$.
+We use a simple architecture with a single hidden layer of dimension $500$ for both the standard Neural ODE and the one with STEER. The effective input dimension is $2$ resulting by concatenating $y$ and $t$, and the output dimension is $1$. 
+
+
+\begin{wrapfigure}[18]{r}{0.55\textwidth}
+	\vspace{-0.3in} 
+	\centering
+	\includegraphics[width=0.55\textwidth]{images/results/stiff-experiments/stiffness_comparisons.png}
+	\caption{Model with STEER regularization achieves a much lower MSE on a Stiff ODE as the stiffness ratio increases.} 
+	\label{fig:stiffness_comparisons}
+\end{wrapfigure}
+
+As shown in \figref{fig:toy_steer}, the solution is initially dominated by the fast exponential term $e^{-1000t}$. After a short period $(t<0.005)$, this transient dies down and the solution is dictated by the slow exponential $e^{-t}$. 
+The training interval $[0,15]$ is broken down into small intervals of length $(t_1-t_0)=0.125$. We sample 1000 random initial points $t_0$ and use $y(t_0)$ as the initialization and then try to estimate the value of the function $y(t_1)$ at $t_1=t_0+0.125$.
+It can be seen in \figref{fig:toy_steer} that standard Neural ODE doesn't show the same asymptotic behavior as the actual solution, whereas STEER regularization enables better asymptotic behavior. The minimum Mean Squared Error(MSE) loss over all the points of the trajectory in the test interval $[0,25]$ for standard Neural ODE is $3.87$, and with STEER regularization with $b=0.124$ it is $0.52$. 
+
+
+To further study the behaviour with varying stiffness ratio, the formula in \eqnref{eq:stiff} is generalized as $\frac{dy}{dt}= -ry + 3r - 2re^{-t}$. The generalized equation has the same asymptotic behavior as the original. It also reaches a steady state at $y=3$. The $-ry$ term would introduce a term of $e^{-rt}$ and another term of $e^{-t}$ would be present in the solution. Thus the stiffness ratio as described in Subsection \ref{subsection:stiff_ode} is exactly $r$. The plot in \figref{fig:stiffness_comparisons} shows that as the stiffness increases, the STEER regularization compares better in terms of MSE to models without the regularization. The experiments were performed using the dormand-prince \cite{dormand1980family} ODE solver.
+
+While we do not promise to have proposed a solution for the difficult problem of Stiff-ODEs \cite{chapra2010numerical}, we empirically observed that it gives improvement on toy examples. We want to highlight that further research is needed in this important area of Stiffness.
+We show analysis about the choice of $b$ for our technique in the appendix.
+
+
+
+\subsection{A Toy example of a Timeseries Model:}
+
+In this experiment, we analyze a toy example of irregularly sampled timeseries models. The experimental setting was the same as in \cite{rubanova2019latent}. The models were tested on a toy dataset of periodic trajectories. The initial point was sampled from a standard Gaussian. Gaussian noise was added to the subsequent observations. Each trajectory has a 100 observations. A fixed subset of these points from each trajectory are sampled. The entire set of 100 observations are attempted to be reconstructed. In the original experiment by \cite{rubanova2019latent} the amplitude was the same throughout the trajectories while the frequency was varied for the $A . sin(\phi t)$ where $\phi$ is the frequency of the sine component. We made a simple change to the experimental setting whereby we also added a $t$ component to the sampled periodic trajectories. Thus the final form of the trajectories being sampled are $A . sin(\phi t) + t $ where $A$ is constant and $\phi$ can vary within the sampled trajectories. In this experimental setting we see that standard Neural ODEs start to produce trajectories which are qualitatively quite different from the actual sampled trajectories. STEER on the other hand produces trajectories which match the qualitative behavior of the sampled trajectories more closely. 
+
+% \begin{wrapfigure}[14]{r}{0.60\textwidth}
+\begin{figure}
+	
+	
+	\centering
+	\begin{tabular} {c} %{*{4}{c@{\hspace{3px}}}}
+		
+		\frame{\includegraphics[width=0.9\linewidth]{images/timeseries_toy/steer_samples.png}}
+		% &
+		% \frame{ \includegraphics[width=0.48\linewidth]{Camera-Ready/images/timeseries_toy/steer.png}}
+		\\
+		\frame{\includegraphics[width=0.9\linewidth]{images/timeseries_toy/neural_ode_samples.png}}
+		% Neural ODE & STEER \\
+	\end{tabular}
+	\caption{A simple addition of $t$ to $A . sin(\phi t)$ changes the qualitative performance of Neural ODE vs STEER. The top row demonstrates  the 3 sample trajectories that have been irregularly sampled using STEER, while the bottom row is with a standard Neural ODE. The green points indicate the irregularly sampled points, while the rest of the points are predicted using each trained model. The amplitude $A$ of the model is the same across the various samples but the frequency $\phi$ is variable across the samples. As we see from the sampled trajectories STEER models the qualitative behavior of the trajectories better than standard Neural ODEs. }
+	\label{fig:toy_timeseries}
+\end{figure}
+% \end{wrapfigure}
+
+\section{Conclusion}
+In this paper we introduced a simple temporal regularization method for Neural ODEs. The regularization consists of perturbing the final time of the integration of the ODE solver. 
+% We show that our approach is theoretically valid by providing a proof for the existence of this regularized solution. 
+The main advantage of our work is the empirical evidence showing the regularization results in simpler dynamics for Neural ODEs models on a wide variety of tasks. This is demonstrated for a specific stiff ODE that is challenging for a basic Neural ODE solver, faster continuous normalizing flow models and improved or comparable accuracy for time series models and deep feedforward networks. We further show that our approach is orthogonal to other regularization approaches and can be thus combined with them to further improve Neural ODEs.
+
+\section{Modified Picard's Iteration:}
+Let the differential equation be
+
+\begin{equation}
+	\frac{d \phi }{dt} = f(t,\phi(t)) ,  \; \; \; \phi(t_0) = z_0.
+\end{equation}
+The modified Picard's iteration can be formulated as
+\begin{subequations}
+	\begin{align}
+		\phi_0(t) &= z_0 , \label{eq:app_picard_1}\\ 
+		\phi_{k+1}(t) &= z_0 + \int_{t_0}^{t + \delta_{k+1}}f(s,\phi_k(s)) ds, \label{eq:app_picard_2}\\
+		\delta_{k+1} &\sim \text{Uniform}(-b,b) \label{eq:app_picard_3}.
+	\end{align}
+\end{subequations}
+
+
+\begin{figure}[ht!]
+	\centering  
+	\includegraphics[trim=0cm 8cm 0cm 6cm, clip=true,width=\linewidth]{images/appendix/proof_figure/proof_figure.pdf} 
+	\caption{Conditions of the proof.}
+	\label{fig:proof_viz}
+\end{figure}
+
+Although the modified Picard's iteration is very close to our technique, it is not the exact same process that is simulated by our proposed technique. There are subtle differences which make the proposed technique different to the one simulated by the modified Picard's iteration. Picard's iteration constructs a sequence of approximate functions $\{ \phi_k(t) \}$ which eventually converge to the desired solution. \eqnref{eq:app_picard_1} defines the initial approximation $\phi_0(t)$ as the initial condition $z_0$ of the ODE. \eqnref{eq:app_picard_2} describes the recurrence relation that relates $\phi_{k+1}(t)$ to $\phi_{k}(t)$. The recurrence relation adds a $\delta_{k+1}$ (\eqnref{eq:app_picard_3}) term which is randomly sampled. 
+
+It can be seen that the right-hand side \eqnref{eq:app_picard_2} defines an operator that maps a function $\phi$ to a function $T[\phi]$ as
+
+\begin{equation}
+	T[\phi_k](t) = \phi_0 + \int_{t_0}^{t + \delta} f(s,\phi_k) ds , \; \; \; \delta \sim \text{Uniform}(-b,b).
+	\label{picard_operator}
+\end{equation}
+
+The following theorem shows the existence of a unique solution for the modified Picard's iteration for our method. 
+\begin{theorem}
+	Suppose that $f: \mathbb{R}^{2} \rightarrow \mathbb{R}$ satisfies the Lipschitz  condition   $| f(t,x_2) - f(t,x_1) | \leq L |x_2-x_1|$ where $ 0 \leq L < \infty$. Suppose that $f$ is continuous and $\exists \; M$  such that $0\leq M <\infty , \; |f (t, x)| \leq M ,\; \forall(t,x)$. 
+	Then the sequence $\{\phi_k \}$ generated by the iteration  $\phi_{k+1}=T[\phi_k], \phi_0(t) = z_0$ is a contraction in expectation. 
+	
+	The sequence $ \{ \phi_k(t) \} $ converges to a unique fixed point $\phi^*(t)$.
+	\label{theorem:picard}
+\end{theorem}
+
+
+\begin{proof}
+	Let the starting range of $t$ for the analysis be $(t_0- \sigma , t_0+ \sigma )$. Let $c$ be such that $\forall i, |\phi_i(t)-\phi_0| \leq c$. The solution only exists in the range $t \in (t_0-\frac{a}{2}, t_0+\frac{a}{2})$ where $a<\text{min}(\frac{c}{M},\frac{1}{2L})$. The parameter $b$ for STEER is chosen as $b \leq \frac{a}{2}$ to ensure that the final effective time after sampling $\delta$ $t + \delta \in (t_0-a,t_0+a)$.
+	
+	Let $\phi_{k+1}(t) = T[\phi_k] = \phi_0 + \int_{t_0}^{t + \delta} f(s,\phi_k) ds , \; \; \; \delta \sim \text{Uniform}(-b,b)$ is well defined on $[t_0-a,t_0+a]$. $\phi_{k+1}(t)$ is continuous since both $\phi_k(t)$ and $f$ are continuous.
+	
+	$\phi_{k+1}(t)\in\mathbb{R}$ since $| \phi_{k+1}(t)-\phi_0|=|\int_{t_0}^{t_1}f(s,\phi_k(s))ds| \leq M|t-t_0| \leq Ma < c$. This is by choice of $a$.
+	
+	Let the metric on the space of solutions $\Phi$ be defined such that if $\Delta(\phi_{k},\phi_{k+1})=\text{max}_{[t_0-a,t_0+a]}|\phi_{k}(t)-\phi_{k+1}(t)|$. $\Phi$ is a complete metric space which implies that all Cauchy sequences converge. We show using Lemma \ref{lemma:contraction} that the operator $T$ is a contraction in expectation. Lemma \ref{lemma:sequence_convergence} shows the convergence of the sequence of functions $\{\phi_k\}$. Finally Lemma \ref{lemma:unique} shows why the fixed point is unique with high probability.
+\end{proof}
+
+\begin{lemma}
+	$\E_{|\delta_2|-|\delta_1|}\Delta(T\phi_1,T\phi_2)\leq \frac{1}{2} \Delta(\phi_1,\phi_2)$
+	\label{lemma:contraction}
+\end{lemma}
+
+\begin{proof}
+	\begin{align}
+		&  |T\phi_{2}(t) - T\phi_{1}(t)| \nonumber  \\
+		&  = | \int_{t_0}^{t+\delta_{2}} (f(s,\phi_{2}(s)) ds - \int_{t_0}^{t+\delta_{1}} ( f(s,\phi_1(s)) ) ds | \nonumber \\
+		&  = | \int_{t_0}^{t} (f(s,\phi_{2}(s) - f(s,\phi_1(s)) ) ds  + \int_{t}^{t+\delta_{2}} (f( s , \phi_{2}(s) )) ds - \int_{t}^{t+\delta_{1}} (f( s , \phi_{1}(s) )) ds |  \nonumber \\
+		&   \leq | \int_{t_0}^{t}  (f(s,\phi_{2}(s) - f(s,\phi_1(s)) )  ds + \int_{t}^{t+\delta_{2}} (f( s , \phi_{2}(s) )) ds - \int_{t}^{t+\delta_{1}} (f( s , \phi_{1}(s) )) ds| \nonumber \\
+		& \leq |L \int_{t_0}^{t} |\phi_{2}(s) - \phi_1(s)| ds + M | \delta_{2}| - M | \delta_1| |   \nonumber \\
+		& \leq |L \Delta(\phi_2,\phi_1) \int_{t_0}^{t} ds + M (| \delta_{2}| -  | \delta_1|)  |  \nonumber \\ 
+		& \leq |L \Delta(\phi_2,\phi_1) (t-t_0) + M (| \delta_{2}| -  | \delta_1|)  |  \nonumber \\ 
+		& \leq |\Delta(\phi_2,\phi_1) La  + M (| \delta_{2}| -  | \delta_1|) |  \nonumber \\
+		& \leq |\frac{1}{2} \Delta(\phi_2,\phi_1) + M(| \delta_{2}| -  | \delta_1|) |   \nonumber \\ %
+	\end{align}
+	
+	Since $a$ is chosen such that $a < min(\frac{c}{M},\frac{1}{2L})$, hence $La<\frac{1}{2}$. If $\delta_i \sim U(-b,b)$ then $|\delta_i| \sim U(0,b)$. Further $\E_{|\delta_2|-|\delta_1|} ( |\delta_{2}| -  | \delta_1|)=0$ using Lemma \ref{lemma:diff_uniform_var}. Thus $\E_{|\delta_2|-|\delta_1|}\Delta(T\phi_1,T\phi_2)\leq \frac{1}{2} \Delta(\phi_1,\phi_2)$
+\end{proof}
+
+\begin{lemma}
+	$\E_{|\delta_{i+1}|-|\delta_{i}|} (|\delta_{i+1}| -  |\delta_i|) = 0$ since $|\delta_i| , |\delta_{i+1}| \sim \text{Uniform}(0,b)$ . The difference of 2 uniform random variables $U(0,b)$ follows the standard triangular distribution. 
+	\label{lemma:diff_uniform_var}
+\end{lemma}
+\begin{proof}
+	Let $X_1=|\delta_{i+1}| , X_2=|\delta_{i}|$ are independent $U(0,b)$ random variables. Let $Y = X_1-X_2 $.
+	The joint probability density of $X_1$ and $X_2$ is
+	$f_{X_1,X2}(x_1,x_2)=1$ , $ 0<x_1<b, 0<x_2<b$
+	Using the cumulative distribution technique, the c.d.f of Y is
+	
+	\begin{equation}
+		\begin{split}
+			F_Y(y) & = P(Y \leq y) \\
+			& = P(X_1-X_2 \leq y )\\
+			&= \begin{cases}
+				\int_0^{b+y} \int_{x_1-y}^b 1 dx_2 dx_1  \; \; \; \; \; -B< y < 0 \\
+				1 - \int_y^{b} \int^{x_1-y}_0 1 dx_2 dx_1  \; \; \; \; \; 0 \leq y < b \\
+			\end{cases}\\
+			&= \begin{cases}
+				\frac{b^2}{2} + by + \frac{y^2}{2} \; \; \; \; \; -b< y < 0 \\
+				1-\frac{b^2}{2} + by - \frac{y^2}{2}\; \; \; \; \; 0 \leq y < b \\
+			\end{cases}
+		\end{split}
+	\end{equation}
+	
+	Differentiating w.r.t y yields the probability distribution function :
+	\begin{equation}
+		f_Y(y) =
+		\begin{cases}
+			y+b \; \; \; \; \; -b< y < 0 \\
+			y-b \; \; \; \; \;  0 \leq y < b
+		\end{cases}
+	\end{equation}
+	
+	From the properties of standard triangular distribution, $E_Y[Y] = 0 $
+	
+\end{proof}
+
+\begin{lemma}
+	The sequence of functions $\{ \phi_k \}$ obtained using the transformation T as $\phi_0(t)=\phi_0, \; \phi_{k+1}=T \phi_k$ converges.
+	\label{lemma:sequence_convergence}
+\end{lemma}
+\begin{proof}
+	$\Delta(\phi_2,\phi_1)=\Delta(T\phi_1,T\phi_0) \leq \frac{1}{2} \Delta(\phi_1,\phi_0) .$
+	
+	Similarly, $\Delta(\phi_3,\phi_2)=\Delta(T\phi_2,T\phi_1) \leq \frac{1}{2} \Delta(\phi_2,\phi_1) \leq \frac{1}{4} \Delta(\phi_1,\phi_0) .$
+	
+	In general $\Delta(T\phi_{n+1},T\phi_n) \leq \left( \frac{1}{2} \right)^n \Delta(\phi_1,\phi_0) $
+	
+	$\implies \Sigma_{n=0}^{\infty} \Delta(T\phi_{n+1},T\phi_n) \leq \Delta(\phi_1,\phi_0) \Sigma_{n=0}^{\infty} \left( \frac{1}{2} \right)^n  $
+	
+	Since the above sum converges and the completeness of $\Phi$ proves that the sequence $ \{ \phi_k \} $ converges.
+\end{proof}
+
+\begin{lemma}
+	T has at most one fixed point with high probability.
+	\label{lemma:unique}
+\end{lemma}
+
+\begin{proof}
+	Suppose there were 2 distinct fixed points $\phi_1$ and $\phi_2$. By the definition of a fixed point $T\phi_k=\phi_k$, hence we obtain $\Delta(T\phi_1,T\phi_2)=\Delta(\phi_1,\phi_2)$ which contradicts Lemma \ref{lemma:contraction}  with high probability as Lemma \ref{lemma:contraction} shows that $|T\phi_{2}(t) - T\phi_{1}(t)| \leq \frac{1}{2} \Delta(\phi_2,\phi_1) + M(| \delta_{2}| -  | \delta_1|) $. Hence $\Delta(T\phi_1,T\phi_2)$ would not be equal to $\Delta(\phi_1,\phi_2)$ with high probability.
+\end{proof}
+
+
+
+\section{Stiff ODE: Ablation Studies}
+As discussed in the experiments section of the paper, we use the same setting as the one described in \cite{chapra2010numerical}. 
+
+The ODE is given by 
+\begin{equation}
+	\frac{dy}{dt}= -1000y + 3000 - 2000e^{-t},
+	\label{eq:app_stiff}
+\end{equation}
+with the initial condition of $y(0)=0$. We use the generalized version of the above equation which is $\frac{dy}{dt}= -ry + 3r - 2re^{-t}$. The generalized equation has the same asymptotic behavior as the original. It also reaches a steady state at $y=3$. Varying $r$ effectively varies the stiffness ratio of the underlying ODE. It thus allows us to analyze the behavior of the various hyperparameters across a wide range of underlying problem difficulty. The experiments were performed using the dormand-prince \cite{dormand1980family} ODE solver.
+
+Since the experimental setting of the stiff ODE converges in minutes rather than hours, we test out a variety of settings for $b$. We try to identify strategies for choosing the hyperparameter $b$ for the proposed STEER regularization. We also consider the use of a Gaussian distribution in place of the Uniform distribution. We further test out the effect of the capacity on the regularization. We perform experiments to observe the behavior by varying the number of units in the hidden layer of the neural network.
+
+\begin{wrapfigure}[20]{r}{0.6\textwidth}
+	\centering
+	\includegraphics[width=0.6\textwidth]{images/appendix/results/steer_stiffness_comparisons_varying_b.png}
+	\caption{Comparison of the losses for the various choices of b across varying stiffness ratios.} 
+	\label{fig:steer_stiffness_comparisons_b_varying}
+\end{wrapfigure}
+
+\textbf{Effect of varying $b$:} As we observe from \figref{fig:steer_stiffness_comparisons_b_varying} as the parameter $b$ varies, we obtain a range of behavior in terms of the MSE error across a wide variety of stiffness ratios. The general trend indicates that larger $b$ such as $b=0.124,0.115,0.085$ have similar behavior and achieve the minimum error in general. Smaller $b$ on the other hand shows behavior similar to standard Neural ODE as is evident from the plots of $b=0.025,0.045$. An intermediate value of $b=0.065$ shows behavior which is better than very small values of $b$ while worse behavior than the large values of $b$. This indicates that higher values of $b$ are better for the proposed STEER regularization as long as $b$ is less than the length of the original interval. 
+
+
+
+
+
+\textbf{Effect of varying distributions:} In the proposed STEER regularization we use the Uniform distribution to sample the end point of the integration. The simplicity of the Uniform distribution adds an elegance to the proposed technique. We want to analyze whether it is the inherent stochasticity that makes the technique effective or the particular choice of the Uniform distribution. As we see from \figref{fig:gaussian_stiffness_comparisons_var_varying} we observe a similar trend as we had seen in \figref{fig:steer_stiffness_comparisons_b_varying}. Greater the stochasticity in the end time the better the performance in terms of MSE. 
+
+\begin{wrapfigure}[14]{r}{0.4\textwidth}
+	\vspace{-0.4in}
+	\centering
+	\includegraphics[width=0.4\textwidth]{images/appendix/results/gaussian_stiffness_comparisons_varying_var.png}
+	\caption{Comparison of the losses for the various choices of standard deviation ($std$) of the Gaussian across varying stiffness ratios.} 
+	\label{fig:gaussian_stiffness_comparisons_var_varying}
+\end{wrapfigure}
+
+
+Delving deeper into the experimental setting of the Gaussian distribution, we sample an end time $t \sim N(t_1,std)$, where $t_1$ was the original end time of the integration and $std$ is the parameter controlling the standard deviation of the Gaussian distribution. \figref{fig:gaussian_stiffness_comparisons_var_varying} indicates that higher standard deviations $std=0.124,0.05$ lead to better performance in terms of MSE. Very small standard deviations start approaching a behavior that is similar to the one shown by standard Neural ODE as exemplified by $std=0.01,0.02,0.03$. It is interesting to note that the transition from $std=0.03$ to $std=0.04$ is rather abrupt and shows an intermediate behavior between the smaller and larger values of $std$.
+
+
+
+
+As we observe from \figref{fig:gaussian_stiffness_comparisons_var_varying} we see the effective behavior of the best approaches with the Uniform distribution and the Gaussian distribution respectively compared alongside a standard Neural ODE. This plot indicates that the high stochasticity in the cases of the Uniform and Gaussian distributions leads to lower losses in terms of the MSE. We observe a slight advantage of using Uniform distribution rather than the Gaussian distribution.
+
+
+
+Although we observe in this case that the Gaussian distribution leads to similar behavior as the Uniform distribution, it comes along with its own implementation challenges. We observe from \figref{fig:gaussian_stiffness_comparisons_var_varying} that better performance is obtained when $std$ is high. On the flipside when $std$ is high, there might be some sampled values of $t$ which might be less than the initial time $t_0$. To avoid such scenarios, we would have to employ clipping on one side. Clipping on only one side would skew the resulting distribution. Clipping on both sides would add another parameter $clip$. It would decide how much to clip on either side of $t_1$. To simplify the technique and reducing the number of hyperparameters we chose to use the Uniform distribution. While Gaussian distribution with intelligent clipping could be a viable alternative we leave its analysis for future work. 
+
+
+
+\begin{figure}[]
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{5px}}}}
+		\includegraphics[width=0.5\linewidth]{images/appendix/results/stiffness_comparisons_unit_wise_steer.png} &
+		\includegraphics[width=0.5\linewidth]{images/appendix/results/stiffness_comparisons_unit_wise_standard.png}
+		\\
+		STEER($b=0.124$) & Standard Neural ODE  \\
+	\end{tabular}
+	\caption{Comparison of the losses for the various number of units in the hidden layer for the case of STEER with $b=0.124$ and a stanard Neural ODE across varying stiffness ratios.}
+	\label{fig:stiffness_comparisons_unitwise}
+\end{figure}
+\textbf{Effect of varying the network capacity:} To complete our ablation study, we also compare the effect of varying the number of units in the hidden layer of the network. In case of STEER regularization, the reduction of the number of units generally hurts as shown in \figref{fig:stiffness_comparisons_unitwise}. The worst performance is obtained with $250$ hidden units. The performance in terms of MSE keeps getting better by increasing the number of hidden units till $500$. Increasing further to $700$ leads to similar behavior but slight reduction in performance. In case of a standard Neural ODE on the other hand, the behavior is quite erratic as seen in \figref{fig:stiffness_comparisons_unitwise} .  Increasing the number of units in the hidden layer doesn't consistently decrease the MSE error.  
+
+
+\begin{wrapfigure}[14]{r}{0.4\textwidth}
+	\vspace{-0.3in}
+	\centering
+	\includegraphics[width=0.4\textwidth]{images/appendix/results/gaussian_vs_steer_stiffness_comparisons.png}
+	\caption{Comparison of a standard Neural ODE along with the Gaussian and Uniform distributions from which the end time $t_1$ can be sampled.} 
+	\label{fig:gaussian_vs_steer_stiffness_comparisons}
+\end{wrapfigure}
+
+
+\textbf{Other forms and failure cases:} We analyze other instances of the equation to delve deeper into the effective behavior. When additional terms in form of $e^{-kt}$ are added to the differential equation, our proposed STEER regularization is able to reasonably reach steady state solutions as shown in \figref{fig:stiffness_misc_cases}. We analyze some failure cases in \figref{fig:stiff_failure}. We observe that when a $sin(t)$ term is added our proposed STEER regularization struggles to fit the periodic behavior. Smaller changes such as changing the steady state from $y=3$ to $y=7$, causes our regularization to fail to reach the steady state solution. This indicates that stiff ODEs need further analysis. Alternative techniques or regularizations may be required to deal with harder instances of stiff ODEs. 
+\vspace{-6pt}
+\begin{figure}[]
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{5px}}}}
+		\includegraphics[width=0.5\linewidth]{images/appendix/miscellaneous/steer_2_e_neg_t_e_neg10_t.png} &
+		\includegraphics[width=0.5\linewidth]{images/appendix/miscellaneous/steer_2_e_neg_t_e_neg10000_t.png}
+		\\
+		$\frac{dy}{dt}= -1000y + 3000 - 2000(e^{-t} + e^{-10t})  $ &  $\frac{dy}{dt}= -1000y + 3000 - 2000(e^{-t}+e^{-10000t})$ \\
+	\end{tabular}
+	\vspace{-2pt}
+	\caption{We experiment with 2 cases which have multiple $e^{-kt}$ in the $\frac{dy}{dt}$ function to be estimated. STEER regularization doesn't totally fail in these scenarios although the performance reduces. }
+	\label{fig:stiffness_misc_cases}
+\end{figure}
+
+\vspace{-6pt}
+\begin{figure}[]
+	\centering
+	\begin{tabular}{*{4}{c@{\hspace{5px}}}}
+		\includegraphics[width=0.5\linewidth]{images/appendix/Failure/steer_2_e_neg_t_sin_t.png} &
+		\includegraphics[width=0.5\linewidth]{images/appendix/Failure/steer_failure_steady_state_7.png}
+		\\
+		$\frac{dy}{dt}= -1000y + 3000 - 2000e^{-t} + 1000sin(t)$ & $\frac{dy}{dt}= -1000y + 7000 - 2000e^{-t}$  \\
+	\end{tabular}
+	\vspace{-2pt}
+	\caption{Failure cases of the proposed STEER regularization. Adding a periodic term to the equation $\frac{dy}{dt}$ makes it harder to learn. Changing the behavior of the steady state from $y=3$ to $y=7$ causes STEER to not reach a viable steady state solution. Note that a standard Neural ODE also fails in these cases}
+	\label{fig:stiff_failure}
+\end{figure}
+
+\begin{table}[ht!]
+	\centering
+	\begin{tabular}{l c c }
+		\toprule
+		& \multicolumn{2}{c}{MNIST} \\
+		& BITS/DIM & TIME \\
+		\midrule
+		\hdashline
+		\multicolumn{3}{c}{$t_1:t_1+b=t_1^{original}=1$} \\
+		\hdashline
+		FFJORD RNODE + STEER ($b=0.5$) & $0.971$ & $16.32$ \\
+		FFJORD RNODE + STEER ($b=0.375$) & $0.973$ & $17.13$  \\
+		FFJORD RNODE + STEER ($b=0.25$) & $0.972$ & $19.71$  \\
+		FFJORD RNODE + STEER ($b=0.125$) & $0.973$ & $22.32$  \\
+		\hdashline
+		\multicolumn{3}{c}{$t_1:t_1=t_1^{original}=1$} \\
+		\hdashline
+		FFJORD RNODE + STEER ($b=0.5$) & $0.974$ & $25.81$ \\
+		FFJORD RNODE + STEER ($b=0.375$) & $0.98$ & $25.72$  \\
+		FFJORD RNODE + STEER ($b=0.25$) & $0.971$ & $25.23$  \\
+		FFJORD RNODE + STEER ($b=0.125$) & $0.976$ & $24.32$  \\
+		\bottomrule %
+	\end{tabular}
+	\caption{Comparison of $b$ in case of Continuous Normalizing Flows. Greater values of $b$ lead to faster convergence. Altering $t_1$ such that $t_1+b=t_1^{original}$ leads to faster convergence times.}  %
+	\label{tab:b_comparison_cnf_results}
+\end{table}
+
+
+\section{Generative Models: Ablation Studies}
+\vspace{-3pt}
+We analyze the effect of varying $b$ in case of continuous normalizing flow based generative models. We conduct ablation studies on the setting of RNODE \cite{finlay2020train} since it converges much faster. Multiple possible values of $b$ could be experimented, since convergence is fast. 
+As we observe from \tabref{tab:b_comparison_cnf_results} there is a general trend which is similar to the one we observed in the case of stiff ODEs. The greater the stochasticity due to a larger value of $b$, the faster the convergence time. The best results were obtained by using $b=0.5$. In case of generative modeling, to obtain faster convergence, the end time $t_1$ had to be constrained such that $t_1+b=t_1^{original}$. The original ending time was $t_1^{original}=1$ for the experiments in \tabref{tab:b_comparison_cnf_results}.  The bottom half of  \tabref{tab:b_comparison_cnf_results} demonstrates that if the $t_1$ is not altered i.e. $t_1=t_1^{original}$, faster convergence is not observed. 

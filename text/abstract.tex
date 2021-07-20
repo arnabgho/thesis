@@ -1,0 +1,65 @@
+\begin{abstract}
+
+Although humans can effortlessly recognise a scene in its totality, it is an extremely challenging problem for computers which is why scene understanding remains one of the fundamental problems in computer vision.
+%
+% Humans can effortlessly recognise everything they see in a scene. \TODO{need a bit more here}
+% However, scene understanding is extremely challenging for computers, and one of the fundamental problems of computer vision.
+This thesis concentrates on pixel-level scene understanding tasks such as semantic- and instance-segmentation, which have applications in diverse fields such as autonomous vehicles, medical diagnosis and assistive technologies for the partially sighted among others.
+% Semantic segmentation aims to label each pixel in an image with an object class label, instance segmentation extends this by also assigning a unique instance identifier to each 
+
+Firstly, this thesis addresses the task of semantic segmentation by integrating mean-field inference of a Conditional Random Field (CRF) with higher order potentials directly into a deep neural network.
+This approach enables joint, end-to-end training of both the parameters of the CRF and the underlying CNN, and achieved state-of-the-art results on public leaderboards at the time of publication.
+
+This method is then extended to the task of instance segmentation.
+In contrast to previous work, the proposed formulation jointly processes all instances in the image.
+As such, one pixel can only be assigned to one instance and the network must thus learn to reason about occlusions between instances.
+Moreover, unlike previous work, this approach can naturally segment ``stuff'' classes.
+This method also achieved state-of-the-art results at the time of publication.
+
+Realising the fact that pixel-level training data for segmentation is time-consuming and thus expensive to obtain, this thesis then proposes a method of training semantic- and instance-segmentation models with weaker supervision.
+In particular, annotations in the form of bounding-boxes and image-level tags are considered, which are shown to significantly reduce annotation time with a relatively small impact on the final performance compared to a fully-supervised baseline.
+
+Finally, this thesis studies the adversarial robustness of popular semantic segmentation architectures.
+This topic is motivated by the fact that during the course of this thesis, segmentation systems have become accurate enough to use in real-world applications, and thus the security of models deployed in production is critical.
+The effect of various architectural components on adversarial robustness are thoroughly evaluated, and mean-field inference of CRFs, multiscale processing (and more generally, input transformation) are shown to naturally implement concurrently proposed adversarial defences.
+% This study will aid future efforts developing models that are robust to adversarial attacks without compromising on accuracy.
+
+\iffalse
+	The observations from this study provide insight into how we can train models that are both accurate and robust to adversarial attacks.
+	
+	 motivated by the fact that semantic segmentation systems have, during the course of this thesis, becoming accurate eno
+	
+	considering that during the course of this thesis, se
+	
+	
+	This thesis first addresses the problem of semantic segmentation by c
+	
+	This thesis first addresses the problem of semantic segmentation by proposing a Conditional Random Field (CRF) with higher order potentials.
+	The iterative mean-field inference algorithm for CRFs is unrolled and formulated as a recurrent neural network, enabling end-to-end training of both the parameters of the CRF and underlying CNN jointly.
+	
+	Mean-field inference of this CRF is unrolled
+	 
+	Humans can effortlessly recognise everything they see in a scene.
+	Examples are types of objects present, number of them, specific location etc
+	However, scene understanding is extremely challenging for computers, and one of the fundamental problems of computer vision
+	This thesis concentrates on pixel-level scene understanding tasks such as semantic segmentation -- -- and instance segmentation -- --
+	Solving these tasks would enable numerous tasks such as autonomous vehicles, medical diagnosis, ar/vr, glasses for partially sighted.
+	
+	First address the problem of semantic segmentation
+	Model structure of the problem with Conditional Random Fields with Higher Order potentials, and show how mean-field inference of this CRF can be unrolled and interpreted as a neural network.
+	Gives us the benefits of both CRFs (prior) and CNN (learn from data).
+	Top performance on Pascal VOC benchmark at the time.
+	
+	Extend this approach to the task of instance segmentation. In contrast to previous work, our formulation jointly processes all instances in the image. As such, one pixel can only be assigned to one instance, and the network must thus learn to reason about occlusions between instances. Furthermore, no problem with dealing with ``stuff'' classes unlike previous work.
+	Leading performance on Cityscapes benchmark.
+	
+	Realising the cost of obtaining annotation, then propose a weakly supervised method of training the semantic- and instance-segmentation networks proposed in this thesis.
+	Only bounding-box and image-level tags as annotation, use approach based on the self-training paradigm, still able to achieve up to 95\% of fully-supervised performance in some cases.
+	
+	Finally, considering that segmentation systems have during the course of the thesis become accurate enough to use in practical applications such as autonomous cars, we consider their security.
+	Specifically, we study the adversarial robustness of various segmentation architectures.
+	Find that mean-field inference causes gradient masking, and input transformations do X.
+	Will help future efforts to understand and develop defences to adversarial examples that are robust whilst not compromising predictive accuracy.
+\fi
+
+\end{abstract}
